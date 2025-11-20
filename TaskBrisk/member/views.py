@@ -5,6 +5,13 @@ from rest_framework.decorators import api_view
 from rest_framework import status
 from django.contrib.auth.models import User
 from django.views.decorators.csrf import csrf_exempt
+from rest_framework_simplejwt.tokens import RefreshToken
+from django.core.mail import send_mail
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
+from django.utils.http import urlsafe_base64_encode
+from django.utils.encoding import force_bytes
+from django.urls import reverse
+from django.utils.http import urlsafe_base64_decode
 
 @csrf_exempt
 @api_view(["POST"])
@@ -44,21 +51,63 @@ def user_login(request):
     password = request.data.get("password")
 
     user = authenticate(username=email, password=password)
-
     if user:
-        return Response({"message": "Login successful", "user": user.username})
-    else:
-        return Response({"error": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST)
+        refresh = RefreshToken.for_user(user)
+        return Response({
+            "message": "Login successful",
+            "user": user.username,
+            "access": str(refresh.access_token),
+            "refresh": str(refresh)
+        })
+    return Response({"error": "Invalid credentials"}, status=400)
 
 
 #  3. FORGOT PASSWORD
+token_generator = PasswordResetTokenGenerator()
 @csrf_exempt
-@api_view(['POST'])
+@api_view(["POST"])
 def forgot_password(request):
     email = request.data.get("email")
 
-    if not User.objects.filter(username=email).exists():
-        return Response({"error": "Email not found"}, status=status.HTTP_400_BAD_REQUEST)
+    if not User.objects.filter(email=email).exists():
+        return Response({"error": "Email not found"}, status=400)
 
-    # Normally you send OTP or reset link – for now return a message
-    return Response({"message": "Password reset link sent to email"})
+    user = User.objects.get(email=email)
+
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = token_generator.make_token(user)
+
+    reset_link = f"http://localhost:3000/reset-password/{uid}/{token}/"
+
+    send_mail(
+        "TaskBrisk Password Reset",
+        f"Click the link to reset your password:\n{reset_link}",
+        "yourgmail@gmail.com",
+        [email],
+        fail_silently=False,
+    )
+
+    return Response({"message": "Password reset email sent"})
+
+#reset password
+
+@csrf_exempt
+@api_view(["POST"])
+def reset_password(request):
+    uid = request.data.get("uid")
+    token = request.data.get("token")
+    password = request.data.get("password")
+
+    try:
+        uid_decoded = urlsafe_base64_decode(uid).decode()
+        user = User.objects.get(pk=uid_decoded)
+    except:
+        return Response({"error": "Invalid link"}, status=400)
+
+    if not token_generator.check_token(user, token):
+        return Response({"error": "Invalid or expired token"}, status=400)
+
+    user.set_password(password)
+    user.save()
+
+    return Response({"message": "Password reset successful!"})
