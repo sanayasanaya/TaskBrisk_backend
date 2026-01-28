@@ -21,8 +21,6 @@ def user_register(request):
     password = request.data.get("password")
     confirm_password = request.data.get("confirm_password")
 
-    print("Incoming:", request.data)  # Debugging line
-
     if not email:
         return Response({"error": "Email is required"}, status=400)
 
